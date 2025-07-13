@@ -18,6 +18,7 @@
         <module>Order-service</module>
         <module>Discovery-server</module>
         <module>sharedlibrary</module>
+        <module>api-gateway</module>
     </modules>
 
     <properties>

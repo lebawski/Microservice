@@ -1,20 +1,21 @@
 package com.example.order_service.Service;
 
-import com.example.order_service.dto.InventoryResponse;
+import com.example.order_service.event.OrderPlacedEvent;
 import com.example.order_service.model.Order;
 import com.example.order_service.model.VehicleOrder;
 import com.example.order_service.repository.InventoryClient;
 import com.example.order_service.repository.OrderRepo;
+import com.example.shared.dto.InventoryResponse;
 import com.example.shared.dto.OrderRequest;
 import com.example.shared.dto.OrderVehicleDto;
 import feign.FeignException;
 import lombok.RequiredArgsConstructor;
+import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.reactive.function.client.WebClient;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 
-import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
 
@@ -26,7 +27,7 @@ public class OrderService {
     private final OrderRepo orderRepo;
     private final WebClient.Builder webClientBuilder;
     private final InventoryClient inventoryClient;
-//    private final com.example.order_service.kafka.OrderProducer orderProducer;
+    private final KafkaTemplate<String,OrderPlacedEvent> kafkaTemplate;
 
 
     @CircuitBreaker(name = "InventoryService", fallbackMethod = "inventoryFallback")
@@ -49,17 +50,14 @@ public class OrderService {
                 .map(VehicleOrder::getCode)
                 .toList();
 
-        InventoryResponse[] inventoryResponses = webClientBuilder.build().get()
-                .uri("http://inventory-service/inventory", uriBuilder -> uriBuilder.queryParam("code", codes).build())
-                .retrieve()
-                .bodyToMono(InventoryResponse[].class)
-                .block();
+        List<InventoryResponse> inventoryResponses = inventoryClient.isAllInStock(codes);
 
-        boolean result = Arrays.stream(inventoryResponses)
+        boolean result = inventoryResponses.stream()
                 .allMatch(InventoryResponse::getIsInStock);
 
         if (result) {
             orderRepo.save(order);
+            kafkaTemplate.send("notificationTopic", new OrderPlacedEvent(order.getOrderNumber()));
         } else {
             throw new IllegalArgumentException("One or more vehicles are not in stock");
         }
@@ -91,12 +89,6 @@ public class OrderService {
             throw new IllegalStateException("Inventory service error: " + e.getMessage());
         }
     }
-//    public void placeOrderWithKafka(OrderRequest orderRequest) {
-//        validateOrderRequest(orderRequest);
-//        Order order = mapToOrder(orderRequest);
-//        orderRepo.save(order);
-//        orderProducer. sendOrder(orderRequest);
-//    }
 
 
     private VehicleOrder mapToDto(OrderVehicleDto orderVehicleDto, Order order) {
